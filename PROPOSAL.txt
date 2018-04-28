@@ -1,9 +1,16 @@
 Team members:
-
+Ritvik Annam
+Alex Wlezien
 
 
 What will you do?
+Our goal is to create a new crate for a multithreaded Rust web framework. We will work on this project by utilizing TCP Streams, and I/O processing. 
 
+The idea came up for two main reasons: first Rust is safe and easy to debug which is a major issue when we're developing web applications, and secondly we wanted to get a more indepth look at Rust. 
+
+The framework will be able to process queries on seperate threads asynchronously. Furthermore we hope to make it extremely simple similar to Python Flask. Our second goal is to be able to add Jinja2 HTML and JS processing to be able to render dynamic templates on the front end. Our third goal is to make it simple to query an SQL database (sqlite3). 
+
+We will attempt to finish the first two goals for the project deadline, but hope to continue working towards the third goal in our own time, and develop the framework further.
 
 
 
