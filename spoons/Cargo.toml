@@ -1,0 +1,6 @@
+[package]
+name = "spoons"
+version = "0.1.0"
+authors = ["Ritvik Annam <rannam@cs.utexas.edu>"]
+
+[dependencies]
