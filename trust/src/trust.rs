@@ -11,6 +11,7 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::sync::Mutex;
 use std::sync::Arc;
+use jinja::*;
 
 //these macros must be defined in main.rs
 //#[macro_use] extern crate lazy_static;
@@ -86,8 +87,14 @@ impl Framework{
             	    println!("decoding request...");
             	    let mut request = Request::parse_request(str::from_utf8(&request_text).unwrap().to_string());
                     let t = (self.routes.get(&(request.clone()).unwrap().url));
-                    println!("url = {:?}",t);
-                    self.pool.add_job(handle_connection, Option::Some(t.unwrap().clone()), stream, request);
+                    println!("url = {:?}", t);
+                    match t{
+                        None => {
+                            let resp = Response::new(Error::UrlNotFoundError as i32, request.unwrap().path);
+                            stream.write(&resp.to_http());
+                        },
+                        Some(t) => self.pool.add_job(handle_connection, Option::Some(t.clone()), stream, request)
+                    }
 				}
 				Err(e) => {
 					println!("{:?}",e);
@@ -253,7 +260,8 @@ pub struct Request {
     method: String,
     headers: HashMap<String,String>,
     content: String,
-    pub values: HashMap<String, UrlPart>
+    pub values: HashMap<String, UrlPart>,
+    path: String
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -266,13 +274,14 @@ enum Error {
 }
 
 impl Request {
-    fn new(url: Url, method : String, headers: HashMap<String,String>, content: String, params: HashMap<String,UrlPart>) -> Request {
+    fn new(url: Url, method : String, headers: HashMap<String,String>, content: String, params: HashMap<String,UrlPart>, path_string: String) -> Request {
         Request {
 			url: url,
             method: method,
             headers: headers,
             content: content,
-            values: params
+            values: params,
+            path: path_string
         }
     }
 
@@ -317,7 +326,8 @@ impl Request {
             method: method_string,
             headers: headers,
             content: content_string,
-            values: HashMap::new()
+            values: HashMap::new(),
+            path: path_string
         };
         return Result::Ok(request);
     }
@@ -352,11 +362,9 @@ impl Response{
         println!("{}", http_response);
         http_response.push_str("\n\n");
         if self.response_code == 404 {
-            let mut file = File::open("templates/404.html").unwrap();
-            let mut contents = String::new();
 
-            file.read_to_string(&mut contents).unwrap();
-            http_response.push_str(&contents.to_string());
+
+            http_response.push_str(&render_template("templates/404.html", hashmap!{String::from("url") => self.content.clone()}));
         }
 
         http_response.push_str(&self.content);
@@ -410,7 +418,7 @@ impl Worker {
         let join_handle = thread::spawn(move ||{
             loop{
                 println!("waiting for job... here's the job queue: ");
-                while job_box.lock().unwrap().is_empty(){ }
+                while job_box.lock().unwrap().is_empty(){}
                 let mut job_queue = job_box.lock().unwrap();
                 let job = job_queue.pop_front();
                 println!("we've gotten a job: {:?}", job);

@@ -5,8 +5,8 @@ authors = ["Ritvik Annam <rannam@cs.utexas.edu>"]
 
 [dependencies]
 time = "0.1.12"
-regex = "0.1.41"
 bufstream = "0.1.3"
 tk-bufstream = "0.3.0"
 maplit = "1.0.1"
 lazy_static = "1.0.0"
+regex = "1.0.0"
