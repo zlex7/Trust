@@ -1,14 +1,100 @@
 What did you propose?
+We proposed a multithreaded web framework with Jinja2 templating support and SQL querying as well (we did not do SQL ultimately).
 
+Using the framework is just importing the Framework, UrlParamType, UrlPart, and Request structs.
+Each function for a route should just accept the Request as a paramater. The request contains all the details about the request including dynamically generateed url info.
+
+To add a route just call .add on your Framework with the url, request type, and function.
+For dynamically generated urls, make your route contain key-value pairs with <name: type>.
 
 what did you do?
-
+    We implemented the beginnings of Trust, multithreaded web framework developed in Rust.
+    Implementation:
+      - Used Rust
+      - Read raw bytes from TCP connections using TCPStream.
+      - Parsed bytes into understandable form, represented by Request struct.
+      Structs:
+        Request:
+          - request method (String)
+          - headers (HashMap)
+          - content (String)
+        Response:
+          - response code (i32)
+          - content (String)
+          - headers (HashMap)
+        Route:
+          represents accessible URL associated with Handler
+          - url (Url Struct)
+          - handler (fn(Request) -> String)
+        Url:
+          representation of URL
+          - url_parts (Vec<UrlPart)
+        Framework:
+          The entire framework struct
+          - Add routes with .add
+          - start framework with .run
+          - uses tcpstreams to read requests and process them
+          - interacts with the threadpool to delineate what jobs need to be processed on what threads
+          - writes data back to the tcpstream on thread complete
+        ThreadPool:
+          manages the threads
+          - creates workers and allows easy creation of jobs
+        Worker:
+          works on a job
+          - waits for a new job
+          - locks the job queue when waiting/popping so that there is no thread concurrent usage
+        Job:
+          - stores all the details about a job
+      Enums:
+        UrlPart:
+          - Holds the type of url part
+            - this can either be a static word or dynamic variable
+        UrlParamType:
+          - type of dynamic variable
+      Features of Trust:
+        - Modularity enabled through mapping functions to their respective urls and HTTP methods they wish to handle. They return
+          a string or response object, which the framework then handles.
+        - Useful abstraction of HTTP responses and requests in associated structs
+        - Framework struct that may be configured to expose a variable number of urls and map function logic to specified urls.
+        - parameterization of URLs through specification of placement and type of parameter.
+        - near-guaranteed type-safety, thread-safety, and lack of runtime errors due to safe memory management through smart pointers.
+        - (NEED TO IMPLEMENT) multithreaded serving of requests, to allow many asynchronous requests to be served at any one time. This provides large speed increase.
 
 What worked?
-
+A lot worked. For one we were able to make an easily creatable, dynamically mapped url routed, multithreaded web framework. 
+We were also able to add a lot of structure to the code to be extendable.
 
 What didn't work?
-
+While we're extremely proud of what we did (it took so long and required so much planning!), there are a few things we'd like to change:
+First, the code feels uglier than what we'd like it to be. This would mean modularizing and cleaning it up to allow for more extensibility potentially from more users.
+Second, the multithreading currently blocks a thread rather than idling it - this causes the threads to loop continuously until they have a job availible.
+Thirdly, the request url parsing is somewhat finicky - for example if the path actually has a static number in it i.e. google.com/1337/ to access a static page about leetspeak then our system would incorrectly consider it a dynamic url
+Fourthly, the system handles only small tcpstreams.
+Fifthly, there isn't regex matching for routes -> functions, but our current way is pretty alright.
 
 What did you learn?
-
+Networking (TCP Streams and HTTP Requests):
+  - We had a basic knowledge of HTTP requests prior to this, and we've learnt a lot more about how the requests are formatted, the headers, and the data that can be sent
+  - Parsing routes: this was a particular challenge and implementation especially in developing the multi-route schema
+  - TCP: TCP streams were sort of new to us and utilizing the interface for them cleared up some holes we had when we used other frameworks like Flask
+API/System Design:
+  - Modularity is amazing
+  - Working together means planning out everything together which helped
+  - Planning api, accessibility to our framework (e.g. how to allow users to specify accessible urls and map functions onto those urls)
+  - How to expose http requests and responses to client in an abstracted but still understandable way. To do this,
+Rust:
+  - This project helped us much more than PC in learning Rust
+  - Lifetimes: this was a concept we didn't particularly understand because we had no need to use it; however, by using lifetimes certain aspects of rust can be overcome and more accessible structures and functions can be written
+  - Ownership: Ownership actually had to be used here which was very useful in designing this
+    - moreover, ownership means less errors server side
+    - Python Flask for example allows nulls and creates many runtime exceptions
+  - String and &str: we felt as though we hacked through this previously, but we understand the difference a little better knowledge
+  - understand how to view lifetimes in Rust, when to clone an object and when to pass a reference instead. This is exemplified by the String vs &str debate.
+  - How macros work, when to use them, why they are useful, and why they can be misleading and provide obscure errors at times.
+  - For example, we attempted to find reasonable ways to allow clients to specify urls mapping to functions in macros above each function. However,
+    we could not find a way, nevermind a clear and concise way, to do this. Other web frameworks such as Rust implemented this through plug-ins, a
+    way to manipulate the syntax tree the Rust compiler generates at compile time.
+  - crates - we used a good number of crates and the simplicity of crates is phenomenal!
+  - multithreading - like lifetimes, boxing, arc, mutexes - we really learnt a lot on this project
+Multithreading:
+  - We learnt a decent amount of multithreading stuff just from reading online in a lot of places, but we mainly felt as though a more formal and comprehensive investigation into threading would be better

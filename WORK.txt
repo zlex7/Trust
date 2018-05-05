@@ -1,2 +1,6 @@
 member             relative contribution
 
+Ritvik Annam       50%
+Alex Wlezien       50%
+
+                   ^ yes this is real
