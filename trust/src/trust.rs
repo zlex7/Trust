@@ -1,32 +1,77 @@
 use std::net::{TcpListener, TcpStream};
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::LinkedList;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::str;
 use std::io::{Write, Read, BufRead, Cursor};
+use std::thread;
+use std::fs::File;
+use std::io::prelude::*;
+use std::sync::Mutex;
+use std::sync::Arc;
 
 //these macros must be defined in main.rs
 //#[macro_use] extern crate lazy_static;
 //#[macro_use] extern crate maplit;
 
-// struct ThreadPool{
-//     workers: Vec<Worker>
-// }
+lazy_static! {
+    static ref default_headers: HashMap<String, String> = hashmap!{String::from("Content") => String::from("text/html; charset=UTF-8"), String::from("Connection") => String::from("close")};
+}
+
+lazy_static! {
+    static ref accepted_methods: HashSet<String> = hashset!{String::from("GET"), String::from("POST"), String::from("PUT"), String::from("DELETE")};
+}
+
+fn handle_connection(mut route: Option<Route>, request: Result<Request,Error>, mut stream: TcpStream){
+    match request {
+        Ok(mut request) => {
+            println!("url: {:?}", request.url);
+            let response = match route {
+                Some(ref mut route) => {
+                    request.values = request.url.get_param_hashmap(&route.url);
+                    println!("values: {:?}", request.values);
+                    // let response_code = match {
+                    //     _ => 200
+                    // };
+                    let response_code = 200;
+                    Response::new(response_code, (route.handler)(request))
+                }
+                None => Response::new(404, "".to_string())
+            };
+            println!("decoded request!");
+            // println!("routes: {:?}", routes);
+            stream.write(&response.to_http());
+        }
+        Err(e) => {
+            let response = Response::new(e as i32, "".to_string());
+            stream.write(&response.to_http());
+        }
+    }
+}
 
 pub struct Framework {
-    routes: HashMap<Url, Route>
+    routes: HashMap<Url, Route>,
+    pool: ThreadPool
 }
 
 impl Framework{
     pub fn new() -> Framework{
         Framework{
-            routes: HashMap::new()
+            routes: HashMap::new(),
+            pool: ThreadPool::new(1)
         }
     }
-    pub fn add(&mut self, path: String, request_type: String, handler: fn(Request)->String) -> &mut Framework{
-        let url = Url::from_raw(&path);
-        let route = Route{url: url.clone(), handler: handler, request_type: request_type};
+
+    pub fn add(&mut self, path: &str, request_type: &str, handler: fn(Request)->String) -> &mut Framework{
+        let url = Url::from_keyed(&path.to_string());
+        println!("{:?}",url);
+        let route = Route{url: url.clone(), handler: handler, request_type: request_type.to_string()};
         self.routes.insert(url, route);
         self
     }
+
 	pub fn run(&mut self){
 		let listener = TcpListener::bind("127.0.0.1:8080").unwrap();
 		println!("serving requests on {}", "127.0.0.1:8080");
@@ -34,7 +79,15 @@ impl Framework{
 			match stream {
 				Ok(mut stream) => {
 					println!("new client!");
-					self.handle_connection(stream);
+                    let mut request_text: [u8; 10000] = [0 ; 10000];
+            	    //TODO: buffering for large requests w/ data
+            	    println!("reading raw request into buffer");
+            	    stream.read(&mut request_text);
+            	    println!("decoding request...");
+            	    let mut request = Request::parse_request(str::from_utf8(&request_text).unwrap().to_string());
+                    let t = (self.routes.get(&(request.clone()).unwrap().url));
+                    println!("url = {:?}",t);
+                    self.pool.add_job(handle_connection, Option::Some(t.unwrap().clone()), stream, request);
 				}
 				Err(e) => {
 					println!("{:?}",e);
@@ -43,116 +96,196 @@ impl Framework{
 		}
 	}
 
-	fn handle_connection(&mut self, mut stream: TcpStream){
-	    // let buffer = IoBuf::new(stream);
-   		let mut request_text : [u8; 10000] = [0 ; 10000];
-	   	// let read_size = buffer.read().expect("No response to read");
-	    //TODO: buffering for large requests w/ data
-	    println!("reading raw request into buffer");
-	    stream.read(&mut request_text);
-	    let response_code = 200;
-	    println!("decoding request...");
-	    let request = Request::parse_request(str::from_utf8(&request_text).unwrap().to_string());
-		println!("decoded request!");
-		let response = Response::new(response_code, (self.routes.get(&request.url).unwrap().handler)(request));
-    	stream.write(&response.to_http());
-    	// let response = b"HTTP/1.1 200 OK\n Content-Type: text/html; charset=UTF-8\n Connection: close\n\n <html><head></head><body>hello</body></html>";
-	}
+    pub fn getRouteString(&self) -> String {
+        return format!("{:?}", self.routes);
+    }
+
+
+    // let response = b"HTTP/1.1 200 OK\n Content-Type: text/html; charset=UTF-8\n Connection: close\n\n <html><head></head><body>hello</body></html>";
 }
 
-#[derive(Hash)]
-#[derive(Eq)]
-#[derive(PartialEq)]
-#[derive(Clone)]
-
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 enum UrlParamType {
-    INT,
-    UINT,
-    STRING
+    INT
 }
 
-#[derive(Hash)]
-#[derive(Eq)]
-#[derive(PartialEq)]
-#[derive(Clone)]
-
-enum UrlPart {
+#[derive(Eq, Clone, Debug)]
+pub enum UrlPart {
     WORD(String),
-    PARAM(String,UrlParamType)
+    PARAM(String,String,UrlParamType)
 }
 
-// struct UrlParam {
-//     name: &str,
-//     type: UrlParamType
-// }
-
-#[derive(Hash)]
-#[derive(Eq)]
-#[derive(PartialEq)]
-#[derive(Clone)]
-struct Url {
-    url_parts: Vec<UrlPart>
-}
-
-impl Url {
-    fn from_raw(url: &str) -> Url {
-        let url_parts_raw: Vec<&str> = url.split("/").collect();
-        let mut url_parts_processed: Vec<UrlPart> = Vec::new();
-        let mut ind = 0;
-        while ind < url_parts_raw.len() {
-            if url_parts_raw[ind].starts_with("<") && url_parts_raw[ind].ends_with(">") {
-                let param_parts : Vec<&str> = url_parts_raw[ind].get(1..url_parts_raw[ind].len()).unwrap().split(":").collect();
-                let param_type = param_parts[1];
-                url_parts_processed.push(UrlPart::PARAM(String::from(param_parts[0]),match param_type {
-                    "int" => UrlParamType::INT,
-                    "uint" => UrlParamType::UINT,
-                    "str" => UrlParamType::STRING,
-                    _ => UrlParamType::STRING
-                }));
+impl ::std::hash::Hash for UrlPart {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            &UrlPart::WORD(ref word) => {
+                word.hash(state);
+            },
+            &UrlPart::PARAM(ref name, ref value, ref param_type) => {
+                param_type.hash(state);
             }
-            ind += 1;
-        }
-        return Url {
-            url_parts: url_parts_processed
         }
     }
 }
 
+impl PartialEq for UrlPart {
+    fn eq(&self, other: &UrlPart) -> bool {
+        match self {
+            &UrlPart::WORD(ref word) => {
+                match other {
+                    &UrlPart::WORD(ref word2) => {
+                        return word == word2
+                    }
+                    _ => return false
+                }
+            },
+            &UrlPart::PARAM(ref name, ref value, ref param_type) => {
+                match other {
+                    &UrlPart::PARAM(ref name2,ref value2,ref param_type2) => {
+                        return param_type == param_type2
+                    }
+                    _ => return false
+                }
+            }
+        }
+    }
+}
+
+// impl Eq for UrlPart {}
+
+#[derive(Eq, Clone, Debug)]
+struct Url {
+    parts: Vec<UrlPart>,
+}
+
+impl ::std::hash::Hash for Url {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.parts.hash(state);
+    }
+}
+
+impl PartialEq for Url {
+    fn eq(&self, other: &Url) -> bool {
+        return self.parts == other.parts;
+    }
+}
+
+impl Url {
+    pub fn get_param_hashmap(&mut self, other: &Url) -> HashMap<String,UrlPart>{
+        let mut params : HashMap<String,UrlPart> = HashMap::new();
+        let mut ind = 0;
+        while ind < self.parts.len() {
+            match &self.parts[ind] {
+                &UrlPart::PARAM(ref name,ref value,ref param_type) => {
+                    match &other.parts[ind] {
+                        &UrlPart::PARAM(ref name2,ref value2,ref param_type2) => {
+                                let new_part = UrlPart::PARAM(name2.clone(),value.clone(),param_type2.clone());
+                                params.insert(name2.clone(),new_part);
+
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+            ind += 1;
+        }
+        return params;
+    }
+
+    fn from_filled(url: &str) -> Url {
+        let url_parts_raw: Vec<&str> = url.split("/").collect();
+        println!("{:?}",url_parts_raw);
+        let mut url_parts_processed: Vec<UrlPart> = Vec::new();
+        let params : HashMap<String,UrlPart> = HashMap::new();
+        let mut ind = 1;
+        while ind < url_parts_raw.len() {
+            if url_parts_raw[ind].parse::<i64>().is_ok(){
+                let param_value = url_parts_raw[ind];
+                url_parts_processed.push(UrlPart::PARAM(String::from(""), param_value.to_string(), UrlParamType::INT));
+            }
+            else {
+                url_parts_processed.push(UrlPart::WORD(String::from(url_parts_raw[ind])));
+            }
+            ind += 1;
+        }
+        return Url {
+            parts: url_parts_processed,
+        }
+    }
+
+    fn from_keyed(url: &str) -> Url {
+        let url_parts_raw: Vec<&str> = url.split("/").collect();
+        println!("{:?}",url_parts_raw);
+        let mut url_parts_processed: Vec<UrlPart> = Vec::new();
+        let mut ind = 1;
+        while ind < url_parts_raw.len() {
+            if url_parts_raw[ind].starts_with("<") && url_parts_raw[ind].ends_with(">") {
+                let param_parts : Vec<&str> = url_parts_raw[ind].get(1..url_parts_raw[ind].len()).unwrap().split(":").collect();
+                let param_type = param_parts[1];
+                let param_name = param_parts[0];
+                url_parts_processed.push(UrlPart::PARAM(String::from(param_name),"".to_string(), match param_type {
+                    "int" => UrlParamType::INT,
+                    _ => UrlParamType::INT
+                }));
+            }
+            else {
+                url_parts_processed.push(UrlPart::WORD(String::from(url_parts_raw[ind])));
+            }
+            ind += 1;
+        }
+        return Url {
+            parts: url_parts_processed,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct Route {
     url: Url,
     handler: fn(Request) -> String,
     request_type: String
 }
 
-lazy_static! {
-    static ref default_headers: HashMap<String, String> = hashmap!{String::from("Content") => String::from("text/html; charset=UTF-8"), String::from("Connection") => String::from("close")};
-}
-
+#[derive(Debug, Clone)]
 pub struct Request {
-	url: Url, 
+	url: Url,
     method: String,
     headers: HashMap<String,String>,
-    content: String
+    content: String,
+    pub values: HashMap<String, UrlPart>
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Error {
+    BadRequestError = 400,
+    ForbiddenError = 403,
+    UrlNotFoundError = 404,
+    MethodNotAllowedError = 405,
+    ServerError = 500,
 }
 
 impl Request {
-    fn new(url: Url, method : String, headers: HashMap<String,String>, content: String) -> Request {
+    fn new(url: Url, method : String, headers: HashMap<String,String>, content: String, params: HashMap<String,UrlPart>) -> Request {
         Request {
-			url: url, 
+			url: url,
             method: method,
             headers: headers,
-            content: content
+            content: content,
+            values: params
         }
     }
 
-    fn parse_request(req: String) -> Request{
+    fn parse_request(req: String) -> Result<Request, Error> {
         let mut cursor = Cursor::new(req.as_bytes());
         let mut method: Vec<u8> = Vec::new();
         cursor.read_until(' ' as u8, &mut method);
         let mut path: Vec<u8> = Vec::new();
         cursor.read_until(' ' as u8, &mut path);
-        let mut rand: String = String::new();
-        cursor.read_line(&mut rand);
+
+        let mut version: String = String::new();
+        cursor.read_line(&mut version);
+
         let mut headers: HashMap<String, String> = HashMap::new();
         let mut rest_of_file: Vec<u8> = Vec::new();
         cursor.read_until('\0' as u8, &mut rest_of_file);
@@ -171,16 +304,22 @@ impl Request {
         	}
 		}
         let content = rof_split[1];
-        let method_string = str::from_utf8(&method).expect("method error").to_string();
-        let content_string: String = content.to_string();
-		let path_string = str::from_utf8(&path).expect("path error").to_string();
+        let method_string = str::from_utf8(&method).expect("method error").trim().to_string();
+        let content_string: String = content.trim().to_string();
+		let path_string = str::from_utf8(&path).expect("path error").trim().to_string();
+
+        if !accepted_methods.contains(&method_string) {
+            return Result::Err(Error::UrlNotFoundError);
+        }
         //println!("method: {:?}, headers: {:?}, content: {}", method_string, headers, content_string);
-        Request {
-			url: Url::from_raw(&path_string),
+        let request = Request {
+			url: Url::from_filled(&path_string),
             method: method_string,
             headers: headers,
-            content: content_string
-        }
+            content: content_string,
+            values: HashMap::new()
+        };
+        return Result::Ok(request);
     }
 }
 
@@ -189,6 +328,7 @@ struct Response{
     content: String,
     response_code: i32
 }
+
 
 impl Response{
     pub fn new(response_code: i32, content: String) -> Response {
@@ -200,6 +340,7 @@ impl Response{
     }
     //TODO: unchanged hashmap means reparsing
     fn to_http(&self) -> Vec<u8> {
+
         let mut http_response = String::from(format!("HTTP/1.1 {}\n", self.response_code));
         println!("{:?}", self.headers);
         for (key, value) in self.headers.iter() {
@@ -210,14 +351,102 @@ impl Response{
         }
         println!("{}", http_response);
         http_response.push_str("\n\n");
+        if self.response_code == 404 {
+            let mut file = File::open("templates/404.html").unwrap();
+            let mut contents = String::new();
+
+            file.read_to_string(&mut contents).unwrap();
+            http_response.push_str(&contents.to_string());
+        }
+
         http_response.push_str(&self.content);
         return http_response.into_bytes();
     }
 }
 
+struct ThreadPool
+{
+    free_workers: Vec<Worker>,
+    used_workers: Vec<Worker>,
+    jobs: Arc<Mutex<LinkedList<Job>>>
+}
 
-// fn make_default_headers() {
-//
-//     default_headers = hashmap!{"Content" => "text/html; charset=UTF-8", "Connection" => "close"};
-// }
+impl ThreadPool{
+    fn new(size: i32) -> ThreadPool{
+        let mut t = ThreadPool{
+            free_workers: Vec::with_capacity(size as usize),
+            used_workers: Vec::with_capacity(size as usize),
+            jobs: Arc::new(Mutex::new(LinkedList::new()))
+        };
 
+        for i in 0..size {
+            t.free_workers.push(Worker::new(i));
+            t.free_workers[i as usize].start(Arc::clone(&t.jobs));
+        }
+
+        return t;
+    }
+
+    fn add_job(&mut self, handler: fn(Option<Route>,Result<Request, Error>,TcpStream) -> (), route: Option<Route>, stream: TcpStream, request: Result<Request, Error>){
+        let job = Job::new(handler, route, request, stream);
+        self.jobs.lock().unwrap().push_back(job);
+    }
+}
+
+struct Worker {
+    id: i32
+}
+
+impl Worker {
+    fn new(id: i32) -> Worker {
+        Worker {
+            id: id
+        }
+    }
+
+    fn start(&self, jobs: Arc<Mutex<LinkedList<Job>>>){
+        println!("starting thread, worker id = {}",self.id);
+        let job_box = Box::new(jobs);
+        let join_handle = thread::spawn(move ||{
+            loop{
+                println!("waiting for job... here's the job queue: ");
+                while job_box.lock().unwrap().is_empty(){ }
+                let mut job_queue = job_box.lock().unwrap();
+                let job = job_queue.pop_front();
+                println!("we've gotten a job: {:?}", job);
+                drop(job_queue);
+                match job {
+                    Some(job) => (job.handler)(job.route, job.request, job.stream),
+                    None => {}
+                };
+                // if jobs.lock().unwrap().len() > 0{
+                // let vec = match jobs.lock().unwrap().pop_front() {
+                    // Some(job) => job,
+                    // None => {}
+                // };
+                //pop off a job if its is availible otherwise block
+                //call the job.handler(request)
+            }
+        });
+    }
+}
+
+#[derive(Debug)]
+struct Job {
+    handler: fn(Option<Route>,Result<Request, Error>,TcpStream) -> (),
+    route: Option<Route>,
+    request: Result<Request,Error>,
+    stream: TcpStream,
+    // join_handle: thread::JoinHandle<fn()>
+}
+
+impl Job {
+    fn new(handler: fn(Option<Route>,Result<Request, Error>,TcpStream) -> (), route: Option<Route>, request: Result<Request,Error>, stream: TcpStream) -> Job{
+        return Job {
+            handler: handler,
+            request: request,
+            route: route,
+            stream: stream
+        }
+    }
+}
